@@ -1,0 +1,26 @@
+# AWS SAM build outputs
+.aws-sam/
+samconfig.toml
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Environment and sensitive keys
+.env
+*.pem
+*.key
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

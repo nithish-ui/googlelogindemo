@@ -1,0 +1,92 @@
+name: Deploy AWS 3-Tier Google Login (Single Branch)
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: SAM Build
+        run: |
+          sam build
+
+      - name: SAM Deploy (Tier 2 & Tier 3 Infrastructure)
+        run: |
+          sam deploy \
+            --stack-name googlelogin-3tier \
+            --region ${{ secrets.AWS_REGION || 'us-east-1' }} \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+                GoogleClientId="${{ secrets.GOOGLE_CLIENT_ID }}" \
+                GoogleClientSecret="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
+                Environment="dev"
+
+      - name: Configure and Deploy Frontend (Tier 1 Presentation)
+        run: |
+          # 1. Fetch CloudFormation Stack Outputs
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name googlelogin-3tier \
+            --query "Stacks[0].Outputs[?OutputKey=='Tier2ApiEndpoint'].OutputValue" \
+            --output text)
+
+          BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name googlelogin-3tier \
+            --query "Stacks[0].Outputs[?OutputKey=='Tier1FrontendBucketName'].OutputValue" \
+            --output text)
+
+          CLOUDFRONT_URL=$(aws cloudformation describe-stacks \
+            --stack-name googlelogin-3tier \
+            --query "Stacks[0].Outputs[?OutputKey=='Tier1CloudFrontURL'].OutputValue" \
+            --output text)
+
+          echo "Deployed API Gateway: $API_URL"
+          echo "Target Frontend S3 Bucket: $BUCKET_NAME"
+          echo "CloudFront App URL: $CLOUDFRONT_URL"
+
+          # 2. Inject Deployed API Gateway URL and Client ID into config.js
+          cat <<EOF > frontend/config.js
+          const CONFIG = {
+            GOOGLE_CLIENT_ID: "${{ secrets.GOOGLE_CLIENT_ID }}",
+            API_BASE_URL: "$API_URL",
+            get REDIRECT_URI() {
+              return window.location.origin + window.location.pathname;
+            },
+            MOCK_MODE_IF_NO_API: false
+          };
+          EOF
+
+          # 3. Upload Frontend Assets to S3
+          aws s3 sync frontend/ s3://$BUCKET_NAME --delete
+
+          echo "=========================================================="
+          echo "Deployment Complete! Open your app at: $CLOUDFRONT_URL"
+          echo "=========================================================="

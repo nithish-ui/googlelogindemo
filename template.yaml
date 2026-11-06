@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: >
+  AWS 3-Tier Serverless Architecture:
+  - Tier 1 (Presentation): Amazon S3 + Amazon CloudFront (OAC) Single Page App
+  - Tier 2 (Application): Amazon API Gateway (HTTP API) + AWS Lambda (Python 3.12)
+  - Tier 3 (Data): Amazon DynamoDB + Customer-Managed AWS KMS Key Encryption
+
+Parameters:
+  GoogleClientId:
+    Type: String
+    Default: "YOUR_GOOGLE_CLIENT_ID"
+    Description: "Google OAuth 2.0 Web Client ID for token validation"
+
+  Environment:
+    Type: String
+    Default: "dev"
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+Globals:
+  Function:
+    Timeout: 20
+    MemorySize: 512
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+
+Resources:
+  # ============================================================================
+  # TIER 3: DATA TIER (AWS KMS + Amazon DynamoDB)
+  # ============================================================================
+
+  # Customer Managed Key (CMK) with automated rotation enabled
+  KmsEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: "KMS Customer-Managed Key for Google Login tokens and DynamoDB storage"
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: key-default-policy
+        Statement:
+          - Sid: EnableIAMUserPermissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowDirectServices
+            Effect: Allow
+            Principal:
+              Service:
+                - dynamodb.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:CreateGrant
+              - kms:DescribeKey
+            Resource: '*'
+
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/google-login-3tier-key-${Environment}'
+      TargetKeyId: !Ref KmsEncryptionKey
+
+  # DynamoDB Table with Customer-Managed KMS SSE and PITR
+  UserCredentialsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'google-login-credentials-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: itemId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: itemId
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !GetAtt KmsEncryptionKey.Arn
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # ============================================================================
+  # TIER 2: APPLICATION TIER (Amazon API Gateway + AWS Lambda)
+  # ============================================================================
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: !Sub 'google-login-api-${Environment}'
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Amz-Date
+          - X-Api-Key
+          - X-Amz-Security-Token
+        AllowOrigins:
+          - '*'
+
+  AuthAndInboxFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'google-login-handler-${Environment}'
+      CodeUri: backend/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref UserCredentialsTable
+          KMS_KEY_ID: !GetAtt KmsEncryptionKey.Arn
+          GOOGLE_CLIENT_ID: !Ref GoogleClientId
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserCredentialsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:GenerateDataKey
+                - kms:DescribeKey
+              Resource: !GetAtt KmsEncryptionKey.Arn
+      Events:
+        GoogleAuth:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /auth/google
+            Method: POST
+        GetInbox:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /inbox
+            Method: GET
+        PostInbox:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /inbox
+            Method: POST
+
+  # ============================================================================
+  # TIER 1: PRESENTATION TIER (Amazon S3 + Amazon CloudFront with OAC)
+  # ============================================================================
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'google-login-frontend-${AWS::AccountId}-${Environment}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'OAC-GoogleLoginFrontend-${Environment}'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3FrontendOrigin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: S3FrontendOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${FrontendBucket}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+Outputs:
+  Tier1CloudFrontURL:
+    Description: "Tier 1: Global HTTPS CloudFront URL for the Web Application"
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+
+  Tier1FrontendBucketName:
+    Description: "Tier 1: S3 Bucket Name for uploading frontend files"
+    Value: !Ref FrontendBucket
+
+  Tier2ApiEndpoint:
+    Description: "Tier 2: Amazon API Gateway HTTP API Endpoint base URL"
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+
+  Tier3DynamoDBTable:
+    Description: "Tier 3: DynamoDB Table Name (KMS Encrypted)"
+    Value: !Ref UserCredentialsTable
+
+  Tier3KmsKeyArn:
+    Description: "Tier 3: AWS KMS Customer-Managed Key ARN"
+    Value: !GetAtt KmsEncryptionKey.Arn

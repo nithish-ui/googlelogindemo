@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AWS 3-Tier Serverless | Google Sign-In & KMS Inbox</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Google Identity Services client library -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Navigation Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>CloudSecure</h1>
+          <span class="badge tier-badge">AWS 3-Tier Serverless</span>
+        </div>
+      </div>
+      <div id="authHeaderAction" class="header-action"></div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- 1. LOGIN SCREEN (Tier 1 Presentation) -->
+      <section id="loginScreen" class="view-panel active">
+        <div class="login-card">
+          <div class="login-header">
+            <div class="shield-badge">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+            </div>
+            <h2>Enterprise Authentication</h2>
+            <p>Single sign-on protected by AWS KMS and Amazon DynamoDB</p>
+          </div>
+
+          <div class="login-body">
+            <div id="loginAlert" class="alert hidden"></div>
+
+            <div class="oauth-box">
+              <!-- Google Sign In Button Container -->
+              <div id="googleSignInButton" class="google-btn-wrapper"></div>
+              <div id="googleLoading" class="loading-state hidden">
+                <div class="spinner"></div>
+                <span>Verifying Google token with AWS Lambda...</span>
+              </div>
+            </div>
+
+            <div class="architecture-checklist">
+              <h3>3-Tier Security Architecture</h3>
+              <ul>
+                <li>
+                  <span class="dot tier1"></span>
+                  <strong>Tier 1 · Presentation:</strong> S3 + CloudFront HTTPS Single Page App
+                </li>
+                <li>
+                  <span class="dot tier2"></span>
+                  <strong>Tier 2 · Application:</strong> API Gateway + Lambda (Token Verification)
+                </li>
+                <li>
+                  <span class="dot tier3"></span>
+                  <strong>Tier 3 · Data:</strong> DynamoDB + AWS KMS Customer-Managed Encryption
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. AUTHENTICATED DASHBOARD & SECURE INBOX (Tier 1 & 2 & 3) -->
+      <section id="inboxScreen" class="view-panel hidden">
+        <!-- User Info Bar -->
+        <div class="user-profile-banner">
+          <div class="user-meta">
+            <img id="userAvatar" src="" alt="User Avatar" class="user-avatar" />
+            <div>
+              <h3 id="userName">Welcome</h3>
+              <p id="userEmail" class="text-secondary"></p>
+            </div>
+          </div>
+          <div class="banner-actions">
+            <span class="kms-status-pill">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 2l-2 2m-1-1l-2 2M3 21l6-6m0 0l4-4m-4 4l-4-4m8 4l2-2"></path>
+              </svg>
+              KMS Envelope Encryption Active
+            </span>
+            <button id="logoutBtn" class="btn btn-outline">Sign Out</button>
+          </div>
+        </div>
+
+        <!-- Architecture Callout -->
+        <div class="security-infobox">
+          <div class="info-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+              <line x1="6" y1="6" x2="6.01" y2="6"></line>
+              <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+          </div>
+          <div class="info-content">
+            <h4>AWS KMS & DynamoDB Integration</h4>
+            <p>Every credential and session token displayed below is stored in Amazon DynamoDB encrypted with a Customer-Managed Key (CMK) via AWS KMS. Raw tokens are never stored in plaintext.</p>
+          </div>
+        </div>
+
+        <!-- Secure Inbox Container -->
+        <div class="inbox-card">
+          <div class="inbox-toolbar">
+            <div class="toolbar-title">
+              <h2>Secure Inbox & Credential Elements</h2>
+              <span id="inboxCounter" class="badge">0 messages</span>
+            </div>
+            <div class="toolbar-actions">
+              <button id="refreshInboxBtn" class="btn btn-secondary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6"></path>
+                  <path d="M1 20v-6h6"></path>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                Refresh
+              </button>
+              <button id="openNewTokenModalBtn" class="btn btn-primary">
+                + Add Encrypted Token Item
+              </button>
+            </div>
+          </div>
+
+          <!-- Inbox Message List -->
+          <div id="inboxLoader" class="loading-state hidden">
+            <div class="spinner"></div>
+            <span>Loading encrypted inbox elements from DynamoDB...</span>
+          </div>
+          <div id="inboxItemsList" class="inbox-list"></div>
+          <div id="inboxEmptyState" class="empty-state hidden">
+            <p>No inbox items found. Add a token item or sign in again to record credentials.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Modal to Add a new Credential/Token to Inbox -->
+    <div id="newTokenModal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3>Store New Encrypted Credential</h3>
+          <button id="closeModalBtn" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <form id="createTokenForm">
+            <div class="form-group">
+              <label for="tokenTitle">Subject / Element Title</label>
+              <input type="text" id="tokenTitle" placeholder="e.g. Third-Party API Key / Service Token" required />
+            </div>
+            <div class="form-group">
+              <label for="tokenSender">Sender / Source</label>
+              <input type="text" id="tokenSender" placeholder="e.g. Identity Provider" value="Google SSO Service" required />
+            </div>
+            <div class="form-group">
+              <label for="tokenPayload">Credential / Token Value to Encrypt with AWS KMS</label>
+              <textarea id="tokenPayload" rows="3" placeholder="Enter sensitive token or secret key..." required></textarea>
+              <small class="helper-text">This will be encrypted via KMS <code>kms:Encrypt</code> before saving to DynamoDB.</small>
+            </div>
+            <div class="modal-footer">
+              <button type="button" id="cancelModalBtn" class="btn btn-outline">Cancel</button>
+              <button type="submit" class="btn btn-primary">Encrypt & Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>AWS 3-Tier Serverless Architecture | S3 + CloudFront &bull; API Gateway + Lambda &bull; DynamoDB + AWS KMS</p>
+    </footer>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
