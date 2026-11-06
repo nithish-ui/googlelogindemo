@@ -41,8 +41,9 @@ jobs:
         run: |
           sam deploy \
             --stack-name googlelogin-3tier \
+            --resolve-s3 \
             --region ${{ secrets.AWS_REGION || 'us-east-1' }} \
-            --capabilities CAPABILITY_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --parameter-overrides \
